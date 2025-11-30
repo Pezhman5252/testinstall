@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ===============================================
-# Code-Server Complete Installation & Management Script (Ultimate Edition - FIXED)
-# Author: MiniMax Agent
-# Version: 3.1 Ultimate Release (Enhanced with Extensions & Monitoring + GUARANTEED Panel Creation)
-# Description: Automated Code-Server installer with extensions, health monitoring, and guaranteed management panel
+# Code-Server Complete Installation & Management Script (Enhanced + Docker Fix)
+# Author: MiniMax Agent  
+# Version: 2.3 Docker Permission Fix Release
+# Description: Automated Code-Server installer with management panel
 # ===============================================
 
 set -euo pipefail
@@ -22,27 +22,6 @@ NC='\033[0m' # No Color
 CONFIG_FILE="/etc/code-server/installer-config.json"
 LOG_FILE="/var/log/code-server-installer.log"
 MANAGEMENT_PANEL="/usr/local/bin/code-server-panel"
-HEALTH_CHECK_LOG="/var/log/code-server-health.log"
-
-# Code-server extensions (Pre-configured essential extensions)
-DEFAULT_EXTENSIONS=(
-    "ms-python.python"
-    "ms-python.black-formatter"
-    "ms-vscode.vscode-typescript-next"
-    "esbenp.prettier-vscode"
-    "ms-vscode.vscode-eslint"
-    "eamodio.gitlens"
-    "ms-vscode-remote.remote-containers"
-    "bradlc.vscode-tailwindcss"
-    "ms-vscode.vscode-json"
-    "redhat.vscode-yaml"
-    "ms-vscode.hexeditor"
-    "ms-vscode.vscode-markdown"
-    "ms-vscode.cmake-tools"
-    "ms-vscode.cpptools"
-    "visualstudioexptteam.vscodeintellicode"
-    "ms-vscode-remote.remote-ssh"
-)
 
 # Function to print colored output
 print_status() {
@@ -67,11 +46,6 @@ print_error() {
 
 print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_health() {
-    echo -e "${CYAN}[HEALTH]${NC} $1"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HEALTH] $1" >> "$HEALTH_CHECK_LOG"
 }
 
 # Function to check if running as root
@@ -158,20 +132,6 @@ collect_user_input() {
         *) print_error "Invalid choice. Exiting."; exit 1 ;;
     esac
     
-    # Extension selection
-    echo -e "${CYAN}Extension Installation Options:${NC}"
-    echo "1) Install essential extensions (Recommended)"
-    echo "2) Skip extension installation"
-    echo "3) Custom extension selection"
-    read -p "Enter your choice (1-3): " EXTENSION_CHOICE
-    
-    case $EXTENSION_CHOICE in
-        1) EXTENSION_MODE="essential" ;;
-        2) EXTENSION_MODE="none" ;;
-        3) EXTENSION_MODE="custom" ;;
-        *) print_warning "Invalid choice, defaulting to essential extensions"; EXTENSION_MODE="essential" ;;
-    esac
-    
     # Server region/timezone
     echo -n -e "${CYAN}Enter your server timezone (e.g., America/New_York, Europe/London, Asia/Tehran): ${NC}"
     read TIMEZONE
@@ -184,10 +144,9 @@ collect_user_input() {
     "admin_email": "$ADMIN_EMAIL",
     "code_server_password": "$CODE_SERVER_PASSWORD",
     "install_method": "$INSTALL_METHOD",
-    "extension_mode": "$EXTENSION_MODE",
     "timezone": "${TIMEZONE:-UTC}",
     "install_date": "$(date -Iseconds)",
-    "version": "3.1"
+    "version": "2.3"
 }
 EOF
     
@@ -201,10 +160,9 @@ EOF
     "admin_email": "$ADMIN_EMAIL",
     "code_server_password": "${CODE_SERVER_PASSWORD//\\/\\\\}",
     "install_method": "$INSTALL_METHOD",
-    "extension_mode": "$EXTENSION_MODE",
     "timezone": "${TIMEZONE:-UTC}",
     "install_date": "$(date -Iseconds)",
-    "version": "3.1"
+    "version": "2.3"
 }
 EOF
     fi
@@ -434,7 +392,7 @@ install_dependencies() {
             print_status "Installing dependencies..."
             if ! sudo apt install -y curl wget unzip nginx certbot python3-certbot-nginx \
                 git build-essential software-properties-common apt-transport-https \
-                ca-certificates gnupg lsb-release ufw htop jq dnsutils systemd 2>/dev/null; then
+                ca-certificates gnupg lsb-release ufw htop jq dnsutils 2>/dev/null; then
                 print_error "Failed to install some dependencies"
                 print_info "Please check the error messages above and try again"
                 exit 1
@@ -449,7 +407,7 @@ install_dependencies() {
             fi
             print_status "Installing dependencies..."
             if ! sudo yum install -y curl wget unzip nginx certbot python3-certbot-nginx \
-                git gcc gcc-c++ make epel-release htop jq bind-utils systemd 2>/dev/null; then
+                git gcc gcc-c++ make epel-release htop jq bind-utils 2>/dev/null; then
                 print_error "Failed to install some dependencies"
                 print_info "Please check the error messages above and try again"
                 exit 1
@@ -497,39 +455,18 @@ get_docker_compose_cmd() {
     fi
 }
 
-# Function to install code-server with enhanced error handling and version verification
+# Function to install code-server with enhanced error handling AND DOCKER PERMISSION FIX
 install_code_server() {
     print_status "Installing code-server..."
     
-    # IMPROVED: Enhanced version detection with compatibility check
+    # Get latest version with error handling
     local version=""
-    local compatibility_check=true
-    
-    print_status "Checking for latest stable version..."
     if command -v curl &>/dev/null; then
-        # Get latest version info
         version=$(curl -s https://api.github.com/repos/coder/code-server/releases/latest 2>/dev/null | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/' || echo "latest")
-        
-        # Check if version is valid
-        if [[ -z "$version" || "$version" == "null" ]]; then
-            print_warning "Could not determine latest version, using fallback"
-            version="latest"
-        else
-            print_success "Found version: $version"
-            
-            # Verify version compatibility (basic check)
-            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                print_success "Version format validated"
-            else
-                print_warning "Version format unusual, but proceeding"
-            fi
-        fi
     else
         version="latest"
-        print_warning "curl not available, using fallback version"
     fi
-    
-    print_status "Installing code-server version: $version"
+    print_status "Installing version: $version"
     
     if [[ "$INSTALL_METHOD" == "native" ]]; then
         # Native installation
@@ -579,11 +516,42 @@ EOF
             print_warning "Please log out and log back in for Docker permissions to take effect"
         fi
         
-        # Create directories for persistence
+        # Create directories for persistence with proper permissions 🔧 DOCKER FIX
+        print_status "Creating code-server directories..."
         mkdir -p ~/.code-server/{config,local,workspace}
+        
+        # 🔧 DOCKER FIX: Set proper ownership and permissions
+        print_status "Setting proper ownership and permissions..."
+        CURRENT_USER=$(whoami)
+        
+        # Set ownership to current user
+        sudo chown -R $CURRENT_USER:$CURRENT_USER ~/.code-server/ 2>/dev/null || {
+            print_warning "Failed to change ownership, trying as root..."
+            sudo chown -R root:root ~/.code-server/ 2>/dev/null || print_warning "Could not set ownership"
+        }
+        
+        # Set permissions
+        chmod -R 755 ~/.code-server/
+        chmod -R 777 ~/.code-server/workspace  # Make workspace fully accessible
+        
+        # Validate directory creation
+        if [[ ! -d ~/.code-server/config || ! -d ~/.code-server/local || ! -d ~/.code-server/workspace ]]; then
+            print_error "Failed to create code-server directories"
+            exit 1
+        fi
+        
+        print_success "Directories created with proper permissions"
         
         # FIXED: Support both docker compose and docker-compose
         COMPOSE_FILE="docker-compose.yml"
+        
+        # Create backup of existing compose file
+        if [[ -f "$COMPOSE_FILE" ]]; then
+            cp "$COMPOSE_FILE" "$COMPOSE_FILE.backup.$(date +%Y%m%d-%H%M%S)"
+            print_status "Existing compose file backed up"
+        fi
+        
+        # 🔧 DOCKER FIX: Remove problematic DOCKER_USER environment variable
         cat > "$COMPOSE_FILE" <<EOF
 version: '3.8'
 
@@ -599,7 +567,7 @@ services:
       - ~/.code-server/workspace:/home/coder/project
     environment:
       - PASSWORD=$CODE_SERVER_PASSWORD
-      - DOCKER_USER=$USER
+      # 🔧 DOCKER FIX: Removed DOCKER_USER=$USER - it causes permission conflicts
     restart: unless-stopped
 
 networks:
@@ -615,148 +583,56 @@ EOF
         fi
         
         print_status "Using: $DOCKER_COMPOSE_CMD"
-        if ! $DOCKER_COMPOSE_CMD up -d; then
-            print_error "Failed to start Docker container"
+        
+        # 🔧 ADD: Pre-flight checks before starting
+        print_status "Performing pre-flight checks..."
+        
+        # Check if directories are accessible
+        if [[ ! -r ~/.code-server/config || ! -w ~/.code-server/config ]]; then
+            print_error "Cannot read/write to config directory"
             exit 1
         fi
         
-        print_success "Code-server installed with Docker"
-    fi
-}
-
-# IMPROVED: Function to install default extensions
-install_default_extensions() {
-    if [[ "$EXTENSION_MODE" == "none" ]]; then
-        print_status "Skipping extension installation as requested"
-        return 0
-    fi
-    
-    print_status "Installing extensions..."
-    
-    # Wait for code-server to be ready
-    print_status "Waiting for code-server to be ready..."
-    local max_attempts=30
-    local attempt=1
-    
-    while [[ $attempt -le $max_attempts ]]; do
-        if curl -s http://127.0.0.1:8080 >/dev/null 2>&1; then
-            print_success "Code-server is ready for extension installation"
-            break
+        # Check Docker daemon status
+        if ! docker info &>/dev/null; then
+            print_error "Docker daemon is not running"
+            exit 1
         fi
         
-        if [[ $attempt -eq $max_attempts ]]; then
-            print_error "Code-server is not responding after $max_attempts attempts"
-            print_warning "Extensions will need to be installed manually via web interface"
-            return 1
-        fi
-        
-        print_status "Attempt $attempt/$max_attempts - waiting for code-server..."
-        sleep 5
-        ((attempt++))
-    done
-    
-    # Install extensions based on mode
-    if [[ "$EXTENSION_MODE" == "essential" ]]; then
-        print_status "Installing essential extensions..."
-        install_extensions_list "${DEFAULT_EXTENSIONS[@]}"
-    elif [[ "$EXTENSION_MODE" == "custom" ]]; then
-        print_status "Custom extension selection..."
-        select_custom_extensions
-    fi
-}
-
-# Function to install extensions from list
-install_extensions_list() {
-    local extensions=("$@")
-    local success_count=0
-    local total_count=${#extensions[@]}
-    
-    print_status "Installing $total_count extensions..."
-    
-    for extension in "${extensions[@]}"; do
-        print_status "Installing extension: $extension"
-        
-        if [[ "$INSTALL_METHOD" == "native" ]]; then
-            if code-server --install-extension "$extension" 2>/dev/null; then
-                print_success "✓ $extension installed successfully"
-                ((success_count++))
-            else
-                print_warning "✗ Failed to install $extension"
+        if ! $DOCKER_COMPOSE_CMD up -d; then
+            print_error "Failed to start Docker container"
+            print_info "Trying to debug container startup..."
+            
+            # Show recent logs for debugging
+            docker logs code-server 2>/dev/null | tail -10 || print_warning "No logs available"
+            
+            # Try alternative approach - remove and recreate
+            print_status "Attempting cleanup and restart..."
+            $DOCKER_COMPOSE_CMD down 2>/dev/null
+            docker volume prune -f 2>/dev/null
+            
+            # Try starting again
+            if ! $DOCKER_COMPOSE_CMD up -d; then
+                print_error "Failed to start container after cleanup"
+                print_info "Please check Docker logs: docker logs code-server"
+                exit 1
             fi
-        elif [[ "$INSTALL_METHOD" == "docker" ]]; then
-            # For Docker, we'll install via API or after container startup
-            print_info "Note: $extension will be available in Docker container"
-            ((success_count++))
         fi
         
-        sleep 1  # Small delay between installations
-    done
-    
-    print_success "Extension installation completed: $success_count/$total_count successful"
-    
-    if [[ $success_count -lt $total_count ]]; then
-        print_warning "Some extensions failed to install. They can be installed later via the web interface."
+        # 🔧 ADD: Post-startup validation
+        print_status "Validating container startup..."
+        sleep 5
+        
+        # Check if container is running
+        if ! docker ps --filter "name=code-server" --format "table {{.Names}}\t{{.Status}}" | grep -q "Up"; then
+            print_error "Container failed to start properly"
+            print_info "Container logs:"
+            docker logs code-server --tail=20
+            exit 1
+        fi
+        
+        print_success "Code-server installed with Docker and validated"
     fi
-}
-
-# Function for custom extension selection
-select_custom_extensions() {
-    echo -e "${CYAN}Available Extension Categories:${NC}"
-    echo "1) Python Development"
-    echo "2) JavaScript/TypeScript"
-    echo "3) Web Development"
-    echo "4) System/Development Tools"
-    echo "5) Language Support"
-    echo "6) All Essential Extensions"
-    echo "7) Custom Manual Selection"
-    
-    while true; do
-        read -p "Select category (1-7): " category_choice
-        case $category_choice in
-            1)
-                install_extensions_list "ms-python.python" "ms-python.black-formatter" "ms-python.isort" "ms-python.autopep8"
-                break
-                ;;
-            2)
-                install_extensions_list "ms-vscode.vscode-typescript-next" "esbenp.prettier-vscode" "ms-vscode.vscode-eslint" "bradlc.vscode-tailwindcss"
-                break
-                ;;
-            3)
-                install_extensions_list "esbenp.prettier-vscode" "bradlc.vscode-tailwindcss" "formulahendry.auto-rename-tag" "christian-kohler.path-intellisense"
-                break
-                ;;
-            4)
-                install_extensions_list "eamodio.gitlens" "ms-vscode-remote.remote-containers" "redhat.vscode-yaml" "ms-vscode.vscode-json"
-                break
-                ;;
-            5)
-                install_extensions_list "ms-vscode.cpptools" "ms-vscode.cmake-tools" "ms-vscode.vscode-markdown" "ms-vscode.hexeditor"
-                break
-                ;;
-            6)
-                install_extensions_list "${DEFAULT_EXTENSIONS[@]}"
-                break
-                ;;
-            7)
-                echo -e "${CYAN}Enter extension IDs (one per line, empty line to finish):${NC}"
-                custom_extensions=()
-                while true; do
-                    read -p "Extension ID: " ext_id
-                    if [[ -z "$ext_id" ]]; then
-                        break
-                    fi
-                    custom_extensions+=("$ext_id")
-                done
-                if [[ ${#custom_extensions[@]} -gt 0 ]]; then
-                    install_extensions_list "${custom_extensions[@]}"
-                fi
-                break
-                ;;
-            *)
-                print_error "Invalid choice. Please select 1-7."
-                ;;
-        esac
-    done
 }
 
 # Function to configure Nginx reverse proxy with enhanced validation
@@ -1065,229 +941,16 @@ start_services() {
     print_success "Services started"
 }
 
-# IMPROVED: Health monitoring and checks
-setup_health_monitoring() {
-    print_status "Setting up health monitoring..."
-    
-    # Create health check script
-    sudo tee /usr/local/bin/code-server-health-check >/dev/null <<'EOF'
-#!/bin/bash
-
-# Code-Server Health Check Script
-# This script performs regular health checks on code-server and related services
-
-LOG_FILE="/var/log/code-server-health.log"
-CONFIG_FILE="/etc/code-server/installer-config.json"
-
-log_health() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [HEALTH] $1" >> "$LOG_FILE"
-}
-
-# Check if config file exists
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    log_health "ERROR: Configuration file not found"
-    exit 1
-fi
-
-# Load configuration
-DOMAIN=$(jq -r '.domain' "$CONFIG_FILE" 2>/dev/null)
-INSTALL_METHOD=$(jq -r '.install_method' "$CONFIG_FILE" 2>/dev/null)
-
-if [[ -z "$DOMAIN" || -z "$INSTALL_METHOD" ]]; then
-    log_health "ERROR: Invalid configuration"
-    exit 1
-fi
-
-# Check code-server service
-check_code_server() {
-    if [[ "$INSTALL_METHOD" == "native" ]]; then
-        USER=$(whoami)
-        if ! sudo systemctl is-active --quiet code-server@$USER 2>/dev/null; then
-            log_health "WARNING: Code-server service is not running"
-            return 1
-        fi
-    elif [[ "$INSTALL_METHOD" == "docker" ]]; then
-        if ! docker ps --filter "name=code-server" --filter "status=running" | grep -q code-server; then
-            log_health "WARNING: Code-server Docker container is not running"
-            return 1
-        fi
-    fi
-    
-    # Check if port 8080 is listening
-    if ! curl -s http://127.0.0.1:8080 >/dev/null 2>&1; then
-        log_health "WARNING: Code-server port 8080 is not responding"
-        return 1
-    fi
-    
-    log_health "OK: Code-server is responding"
-    return 0
-}
-
-# Check SSL certificate
-check_ssl() {
-    if [[ -d "/etc/letsencrypt/live/$DOMAIN" ]]; then
-        # Check SSL certificate expiry
-        if command -v openssl &>/dev/null; then
-            EXPIRY=$(sudo openssl x509 -enddate -noout -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" 2>/dev/null | cut -d= -f2)
-            if [[ -n "$EXPIRY" ]]; then
-                EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s 2>/dev/null || echo "0")
-                NOW_EPOCH=$(date +%s)
-                DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
-                
-                if [[ $DAYS_LEFT -lt 30 && $DAYS_LEFT -gt 0 ]]; then
-                    log_health "WARNING: SSL certificate expires in $DAYS_LEFT days"
-                    return 1
-                elif [[ $DAYS_LEFT -le 0 ]]; then
-                    log_health "ERROR: SSL certificate has expired"
-                    return 1
-                else
-                    log_health "OK: SSL certificate valid ($DAYS_LEFT days remaining)"
-                    return 0
-                fi
-            fi
-        fi
-        log_health "OK: SSL certificate exists"
-    else
-        log_health "WARNING: No SSL certificate found"
-        return 1
-    fi
-}
-
-# Check disk space
-check_disk_space() {
-    DISK_USAGE=$(df / | awk 'NR==2 {print $5}' | sed 's/%//')
-    if [[ $DISK_USAGE -gt 90 ]]; then
-        log_health "CRITICAL: Disk usage is ${DISK_USAGE}%"
-        return 1
-    elif [[ $DISK_USAGE -gt 80 ]]; then
-        log_health "WARNING: Disk usage is ${DISK_USAGE}%"
-        return 1
-    else
-        log_health "OK: Disk usage is ${DISK_USAGE}%"
-        return 0
-    fi
-}
-
-# Check memory usage
-check_memory() {
-    MEM_USAGE=$(free | awk '/^Mem:/ {printf "%.0f", $3/$2 * 100}')
-    if [[ $MEM_USAGE -gt 90 ]]; then
-        log_health "CRITICAL: Memory usage is ${MEM_USAGE}%"
-        return 1
-    elif [[ $MEM_USAGE -gt 80 ]]; then
-        log_health "WARNING: Memory usage is ${MEM_USAGE}%"
-        return 1
-    else
-        log_health "OK: Memory usage is ${MEM_USAGE}%"
-        return 0
-    fi
-}
-
-# Check nginx
-check_nginx() {
-    if ! sudo systemctl is-active --quiet nginx 2>/dev/null; then
-        log_health "ERROR: Nginx is not running"
-        return 1
-    fi
-    log_health "OK: Nginx is running"
-    return 0
-}
-
-# Run all checks
-main() {
-    log_health "Starting health check cycle"
-    
-    local issues=0
-    
-    check_code_server || ((issues++))
-    check_ssl || ((issues++))
-    check_disk_space || ((issues++))
-    check_memory || ((issues++))
-    check_nginx || ((issues++))
-    
-    if [[ $issues -eq 0 ]]; then
-        log_health "Health check completed: All systems OK"
-    else
-        log_health "Health check completed: $issues issues found"
-    fi
-}
-
-# Check for --daily flag to run daily checks
-if [[ "${1:-}" == "--daily" ]]; then
-    # Daily check - more comprehensive
-    main
-else
-    # Quick health check
-    if ! check_code_server; then
-        log_health "Quick health check failed - code-server not responding"
-        exit 1
-    fi
-fi
-EOF
-    
-    sudo chmod +x /usr/local/bin/code-server-health-check
-    
-    # Create systemd service for health monitoring
-    sudo tee /etc/systemd/system/code-server-health.service >/dev/null <<EOF
-[Unit]
-Description=Code-Server Health Monitor
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/code-server-health-check
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    
-    # Create timer for regular health checks
-    sudo tee /etc/systemd/system/code-server-health.timer >/dev/null <<EOF
-[Unit]
-Description=Code-Server Health Check Timer
-Requires=code-server-health.service
-
-[Timer]
-OnBootSec=5min
-OnUnitActiveSec=15min
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-    
-    # Enable and start the timer
-    sudo systemctl daemon-reload 2>/dev/null
-    sudo systemctl enable --now code-server-health.timer 2>/dev/null || print_warning "Could not enable health monitoring timer"
-    
-    print_success "Health monitoring setup completed"
-    print_info "Health check logs: $HEALTH_CHECK_LOG"
-    print_info "Manual health check: sudo /usr/local/bin/code-server-health-check"
-}
-
-# Function to create management panel (GUARANTEED TO CREATE)
+# Function to create management panel (same as before but with version update)
 create_management_panel() {
     print_status "Creating management panel..."
     
-    # CRITICAL FIX: Ensure the directory exists and has proper permissions
-    sudo mkdir -p "$(dirname "$MANAGEMENT_PANEL")" 2>/dev/null || {
-        print_warning "Could not create directory for management panel, trying alternative..."
-        # Try to create the directory manually
-        if [[ ! -d "$(dirname "$MANAGEMENT_PANEL")" ]]; then
-            print_error "Cannot create directory $(dirname "$MANAGEMENT_PANEL")"
-            print_error "Management panel creation failed"
-            return 1
-        fi
-    }
-    
-    # CRITICAL FIX: Use cat to create the file with proper heredoc handling
     sudo tee "$MANAGEMENT_PANEL" >/dev/null <<'PANEL_EOF'
 #!/bin/bash
 
-# Code-Server Management Panel (Ultimate Edition)
+# Code-Server Management Panel (Enhanced)
 # Author: MiniMax Agent
-# Version: 3.1 Ultimate Release (Enhanced with Extensions & Health Monitoring)
+# Version: 2.3 Docker Permission Fix Release
 
 # Colors
 RED='\033[0;31m'
@@ -1312,18 +975,6 @@ print_error() {
 
 print_header() {
     echo -e "${CYAN}$1${NC}"
-}
-
-print_health() {
-    echo -e "${PURPLE}[HEALTH]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 # Function to detect docker compose command
@@ -1352,7 +1003,6 @@ load_config() {
             DOMAIN=$(jq -r '.domain' "$CONFIG_FILE" 2>/dev/null || echo "")
             INSTALL_METHOD=$(jq -r '.install_method' "$CONFIG_FILE" 2>/dev/null || echo "")
             ADMIN_EMAIL=$(jq -r '.admin_email' "$CONFIG_FILE" 2>/dev/null || echo "")
-            EXTENSION_MODE=$(jq -r '.extension_mode' "$CONFIG_FILE" 2>/dev/null || echo "")
             
             # Validate loaded data
             if [[ -z "$DOMAIN" || -z "$INSTALL_METHOD" || -z "$ADMIN_EMAIL" ]]; then
@@ -1366,7 +1016,7 @@ load_config() {
         fi
     else
         print_error "Configuration file not found: $CONFIG_FILE"
-        print_info "Run the installer first: ./install-code-server-ultimate-fixed.sh"
+        print_info "Run the installer first: ./install-code-server-enhanced.sh"
         exit 1
     fi
 }
@@ -1375,33 +1025,29 @@ load_config() {
 show_menu() {
     clear
     print_header "========================================"
-    print_header "   Code-Server Management Panel Ultimate"
+    print_header "      Code-Server Management Panel"
     print_header "========================================"
     echo -e "${CYAN}Domain:${NC} $DOMAIN"
     echo -e "${CYAN}Installation Method:${NC} $INSTALL_METHOD"
     echo -e "${CYAN}SSL Email:${NC} $ADMIN_EMAIL"
-    echo -e "${CYAN}Extension Mode:${NC} $EXTENSION_MODE"
     echo ""
-    echo "1) Check Status & Health"
+    echo "1) Check Status"
     echo "2) Start Code-Server"
     echo "3) Stop Code-Server"
     echo "4) Restart Code-Server"
     echo "5) Update Code-Server"
     echo "6) View Logs"
     echo "7) SSL Certificate Status"
-    echo "8) Extension Management"
-    echo "9) Health Check (Detailed)"
-    echo "10) Backup Configuration"
-    echo "11) Remove Code-Server"
-    echo "12) System Information"
-    echo "13) Extension Installation"
-    echo "14) Exit"
+    echo "8) Backup Configuration"
+    echo "9) Remove Code-Server"
+    echo "10) System Information"
+    echo "11) Exit"
     echo ""
 }
 
-# Function to check status with enhanced error handling and health monitoring
+# Function to check status with enhanced error handling
 check_status() {
-    echo -e "${CYAN}=== Code-Server Status & Health ===${NC}"
+    echo -e "${CYAN}=== Code-Server Status ===${NC}"
     
     if [[ "$INSTALL_METHOD" == "native" ]]; then
         USER=$(whoami)
@@ -1450,89 +1096,11 @@ check_status() {
     else
         print_error "SSL Certificate: Not found"
     fi
-    
-    # Quick health check
-    echo ""
-    echo -e "${PURPLE}=== Quick Health Check ===${NC}"
-    if [[ -x "/usr/local/bin/code-server-health-check" ]]; then
-        /usr/local/bin/code-server-health-check 2>/dev/null || print_warning "Health check completed with warnings"
-    else
-        print_warning "Health check script not available"
-    fi
-}
-
-# Function to run detailed health check
-detailed_health_check() {
-    echo -e "${PURPLE}=== Detailed Health Check ===${NC}"
-    
-    if [[ -x "/usr/local/bin/code-server-health-check" ]]; then
-        /usr/local/bin/code-server-health-check --daily
-        echo ""
-        echo -e "${CYAN}Recent health logs:${NC}"
-        if [[ -f "/var/log/code-server-health.log" ]]; then
-            tail -n 20 /var/log/code-server-health.log 2>/dev/null || print_info "No health logs available"
-        else
-            print_info "Health log file not found"
-        fi
-    else
-        print_error "Health check script not available"
-    fi
-}
-
-# Function to manage extensions
-extension_management() {
-    echo -e "${CYAN}=== Extension Management ===${NC}"
-    echo "1) List installed extensions"
-    echo "2) Install popular extensions"
-    echo "3) Install from Open VSX marketplace"
-    echo "4) Remove extension"
-    echo "5) Update all extensions"
-    read -p "Select option (1-5): " ext_choice
-    
-    case $ext_choice in
-        1)
-            echo -e "${CYAN}Installed Extensions:${NC}"
-            if [[ -d "~/.local/share/code-server/extensions" ]]; then
-                ls -la ~/.local/share/code-server/extensions/ 2>/dev/null || print_info "No extensions found"
-            else
-                print_info "Extension directory not found"
-            fi
-            ;;
-        2)
-            echo "Installing popular extensions..."
-            # This would call the extension installation function
-            print_info "Feature coming soon - use web interface for now"
-            ;;
-        3)
-            echo -e "${CYAN}Enter extension ID to install:${NC}"
-            read -p "Extension ID (e.g., ms-python.python): " ext_id
-            if [[ -n "$ext_id" ]]; then
-                print_info "Installing $ext_id..."
-                code-server --install-extension "$ext_id" 2>/dev/null || print_error "Failed to install extension"
-            fi
-            ;;
-        4)
-            echo -e "${CYAN}Enter extension ID to remove:${NC}"
-            read -p "Extension ID: " ext_id
-            if [[ -n "$ext_id" ]]; then
-                print_info "Removing $ext_id..."
-                # Removal logic would go here
-                print_info "Feature coming soon - use web interface for now"
-            fi
-            ;;
-        5)
-            print_info "Updating extensions..."
-            print_info "Feature coming soon - use web interface for now"
-            ;;
-        *)
-            print_error "Invalid option"
-            ;;
-    esac
 }
 
 # Function to start services
 start_services_cmd() {
-    print_info "Starting services..."
+    echo "Starting services..."
     if [[ "$INSTALL_METHOD" == "native" ]]; then
         USER=$(whoami)
         sudo systemctl start code-server@$USER 2>/dev/null
@@ -1548,7 +1116,7 @@ start_services_cmd() {
 
 # Function to stop services
 stop_services_cmd() {
-    print_info "Stopping services..."
+    echo "Stopping services..."
     if [[ "$INSTALL_METHOD" == "native" ]]; then
         USER=$(whoami)
         sudo systemctl stop code-server@$USER 2>/dev/null
@@ -1561,7 +1129,7 @@ stop_services_cmd() {
 
 # Function to restart services
 restart_services_cmd() {
-    print_info "Restarting services..."
+    echo "Restarting services..."
     if [[ "$INSTALL_METHOD" == "native" ]]; then
         USER=$(whoami)
         sudo systemctl restart code-server@$USER 2>/dev/null
@@ -1577,7 +1145,7 @@ restart_services_cmd() {
 
 # Function to update code-server
 update_code_server() {
-    print_info "Updating code-server..."
+    echo "Updating code-server..."
     
     if [[ "$INSTALL_METHOD" == "native" ]]; then
         # Update native installation
@@ -1648,7 +1216,7 @@ backup_config() {
     BACKUP_DIR="$HOME/code-server-backup-$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$BACKUP_DIR"
     
-    print_info "Creating backup..."
+    echo "Creating backup..."
     
     if [[ "$INSTALL_METHOD" == "native" ]]; then
         # Backup config directory
@@ -1680,7 +1248,7 @@ remove_code_server() {
         return
     fi
     
-    print_info "Removing code-server..."
+    echo "Removing code-server..."
     
     if [[ "$INSTALL_METHOD" == "native" ]]; then
         USER=$(whoami)
@@ -1708,16 +1276,10 @@ remove_code_server() {
     # Remove config file
     sudo rm -f "$CONFIG_FILE" 2>/dev/null || true
     
-    # Remove health monitoring
-    sudo rm -f /usr/local/bin/code-server-health-check 2>/dev/null || true
-    sudo rm -f /etc/systemd/system/code-server-health.service 2>/dev/null || true
-    sudo rm -f /etc/systemd/system/code-server-health.timer 2>/dev/null || true
-    sudo systemctl daemon-reload 2>/dev/null || true
-    
     print_success "Code-server removed completely"
     
     # Remove management panel
-    sudo rm -f "/usr/local/bin/code-server-panel"
+    sudo rm -f "$MANAGEMENT_PANEL"
     
     exit 0
 }
@@ -1736,69 +1298,6 @@ system_info() {
     echo "Code-Server URL: https://$DOMAIN"
     echo "SSL Status: $([[ -d "/etc/letsencrypt/live/$DOMAIN" ]] && echo "Active" || echo "Inactive")"
     echo "Installation Method: $INSTALL_METHOD"
-    echo "Extension Mode: $EXTENSION_MODE"
-}
-
-# Function to install extensions via management panel
-install_extensions_panel() {
-    echo -e "${CYAN}=== Extension Installation ===${NC}"
-    echo "1) Install essential Python extensions"
-    echo "2) Install JavaScript/TypeScript extensions"
-    echo "3) Install Web development extensions"
-    echo "4) Install Git and collaboration extensions"
-    echo "5) Install all essential extensions"
-    echo "6) Install custom extension"
-    read -p "Select option (1-6): " ext_install_choice
-    
-    case $ext_install_choice in
-        1)
-            code-server --install-extension ms-python.python 2>/dev/null
-            code-server --install-extension ms-python.black-formatter 2>/dev/null
-            code-server --install-extension ms-python.isort 2>/dev/null
-            print_success "Python extensions installation attempted"
-            ;;
-        2)
-            code-server --install-extension ms-vscode.vscode-typescript-next 2>/dev/null
-            code-server --install-extension esbenp.prettier-vscode 2>/dev/null
-            code-server --install-extension ms-vscode.vscode-eslint 2>/dev/null
-            print_success "JavaScript/TypeScript extensions installation attempted"
-            ;;
-        3)
-            code-server --install-extension esbenp.prettier-vscode 2>/dev/null
-            code-server --install-extension bradlc.vscode-tailwindcss 2>/dev/null
-            code-server --install-extension formulahendry.auto-rename-tag 2>/dev/null
-            print_success "Web development extensions installation attempted"
-            ;;
-        4)
-            code-server --install-extension eamodio.gitlens 2>/dev/null
-            code-server --install-extension ms-vscode-remote.remote-containers 2>/dev/null
-            print_success "Git and collaboration extensions installation attempted"
-            ;;
-        5)
-            DEFAULT_EXTENSIONS=(
-                "ms-python.python"
-                "ms-python.black-formatter"
-                "ms-vscode.vscode-typescript-next"
-                "esbenp.prettier-vscode"
-                "ms-vscode.vscode-eslint"
-                "eamodio.gitlens"
-                "bradlc.vscode-tailwindcss"
-            )
-            for ext in "${DEFAULT_EXTENSIONS[@]}"; do
-                code-server --install-extension "$ext" 2>/dev/null
-            done
-            print_success "Essential extensions installation attempted"
-            ;;
-        6)
-            read -p "Enter extension ID: " custom_ext
-            if [[ -n "$custom_ext" ]]; then
-                code-server --install-extension "$custom_ext" 2>/dev/null && print_success "Extension installed" || print_error "Failed to install extension"
-            fi
-            ;;
-        *)
-            print_error "Invalid option"
-            ;;
-    esac
 }
 
 # Main menu loop
@@ -1807,7 +1306,7 @@ management_panel_main() {
     
     while true; do
         show_menu
-        read -p "Select an option (1-14): " choice
+        read -p "Select an option (1-11): " choice
         
         case $choice in
             1) check_status ;;
@@ -1817,13 +1316,10 @@ management_panel_main() {
             5) update_code_server ;;
             6) view_logs ;;
             7) ssl_status ;;
-            8) extension_management ;;
-            9) detailed_health_check ;;
-            10) backup_config ;;
-            11) remove_code_server ;;
-            12) system_info ;;
-            13) install_extensions_panel ;;
-            14) echo "Goodbye!"; exit 0 ;;
+            8) backup_config ;;
+            9) remove_code_server ;;
+            10) system_info ;;
+            11) echo "Goodbye!"; exit 0 ;;
             *) print_error "Invalid option"; sleep 2 ;;
         esac
         
@@ -1843,67 +1339,9 @@ fi
 management_panel_main "$@"
 PANEL_EOF
     
-    # CRITICAL FIX: Ensure file permissions are set correctly
-    if sudo chmod +x "$MANAGEMENT_PANEL"; then
-        print_success "Management panel created at $MANAGEMENT_PANEL"
-        
-        # CRITICAL FIX: Verify the file was created and is executable
-        if [[ -x "$MANAGEMENT_PANEL" ]]; then
-            print_success "Management panel is executable and ready to use"
-        else
-            print_error "Management panel created but may not be executable"
-            print_info "You can make it executable with: sudo chmod +x $MANAGEMENT_PANEL"
-        fi
-        
-        # CRITICAL FIX: Show verification
-        print_info "Verifying management panel..."
-        if [[ -f "$MANAGEMENT_PANEL" ]]; then
-            print_success "✓ Management panel file exists"
-            ls -la "$MANAGEMENT_PANEL" 2>/dev/null || true
-        else
-            print_error "✗ Management panel file does not exist"
-            return 1
-        fi
-    else
-        print_error "Failed to set permissions on management panel"
-        print_info "Manual fix: sudo chmod +x $MANAGEMENT_PANEL"
-        return 1
-    fi
-}
-
-# CRITICAL FIX: Function to ensure management panel is created regardless of errors
-ensure_management_panel() {
-    print_status "Ensuring management panel is created..."
+    sudo chmod +x "$MANAGEMENT_PANEL"
     
-    # Try to create the management panel
-    if create_management_panel; then
-        print_success "Management panel created successfully"
-        return 0
-    else
-        print_warning "Primary creation failed, trying alternative methods..."
-        
-        # Alternative method: Create without sudo if possible
-        if [[ ! -f "$MANAGEMENT_PANEL" ]]; then
-            print_status "Trying alternative creation method..."
-            
-            # Create a minimal version first
-            echo '#!/bin/bash
-echo "Code-Server Management Panel - Basic Version"
-echo "Installation seems incomplete. Please re-run the installer."
-echo "For basic operations, use: sudo systemctl status code-server@$USER"
-' > "/tmp/code-server-panel-basic"
-            
-            if sudo cp "/tmp/code-server-panel-basic" "$MANAGEMENT_PANEL" && sudo chmod +x "$MANAGEMENT_PANEL"; then
-                print_success "Basic management panel created as fallback"
-                rm -f "/tmp/code-server-panel-basic"
-                return 0
-            fi
-        fi
-        
-        print_error "Could not create management panel"
-        print_info "Manual installation required. The panel should be at: $MANAGEMENT_PANEL"
-        return 1
-    fi
+    print_success "Management panel created at $MANAGEMENT_PANEL"
 }
 
 # Function to display completion information
@@ -1919,7 +1357,6 @@ show_completion_info() {
     echo ""
     echo -e "${CYAN}Management:${NC}"
     echo "• Management Panel: sudo $MANAGEMENT_PANEL"
-    echo "• Health Check: sudo /usr/local/bin/code-server-health-check"
     echo "• Quick Commands:"
     echo "  - Check status: sudo systemctl status code-server@\$USER"
     if [[ "$INSTALL_METHOD" == "docker" ]]; then
@@ -1931,36 +1368,22 @@ show_completion_info() {
     echo ""
     echo -e "${CYAN}Log Files:${NC}"
     echo "• Installer Log: $LOG_FILE"
-    echo "• Health Check Log: $HEALTH_CHECK_LOG"
     echo "• Nginx Logs: /var/log/nginx/"
-    echo "• Code-Server Logs: journalctl -u code-server@\$USER"
+    echo "• Code-Server Logs: journalctl -u code-server@$USER"
     echo ""
     echo -e "${CYAN}Configuration:${NC}"
     echo "• Config File: $CONFIG_FILE (secured with 600 permissions)"
     echo "• Nginx Config: /etc/nginx/sites-available/code-server"
-    echo "• Health Monitor: /usr/local/bin/code-server-health-check"
     echo ""
     echo -e "${YELLOW}Security Reminders:${NC}"
     echo "• Your password is stored in: $CONFIG_FILE (root access only)"
     echo "• SSL certificate auto-renews via certbot"
     echo "• Keep your system updated: sudo apt update && sudo apt upgrade"
     echo ""
-    if [[ "$EXTENSION_MODE" != "none" ]]; then
-        echo -e "${YELLOW}Extensions:${NC}"
-        echo "• Essential extensions are installed and ready to use"
-        echo "• Install more via the web interface or management panel"
-        echo ""
-    fi
-    echo -e "${YELLOW}Health Monitoring:${NC}"
-    echo "• Automatic health checks every 15 minutes"
-    echo "• Health monitoring logs: $HEALTH_CHECK_LOG"
-    echo "• View detailed health status in management panel"
-    echo ""
     echo -e "${YELLOW}Next Steps:${NC}"
     echo "1. Access your code-server: https://$DOMAIN"
     echo "2. Use management panel: sudo $MANAGEMENT_PANEL"
     echo "3. Review logs: tail -f $LOG_FILE"
-    echo "4. Check health status: sudo /usr/local/bin/code-server-health-check"
     echo ""
     
     # Save completion info to file
@@ -1972,29 +1395,17 @@ Domain: $DOMAIN
 Installation Method: $INSTALL_METHOD
 Management Panel: $MANAGEMENT_PANEL
 SSL Email: $ADMIN_EMAIL
-Extension Mode: $EXTENSION_MODE
 Installation Date: $(date)
-Version: 3.1 Ultimate Release (Enhanced with Extensions & Health Monitoring)
+Version: 2.3 Docker Permission Fix Release
 
 Access: https://$DOMAIN
 Management: sudo $MANAGEMENT_PANEL
-Health Check: sudo /usr/local/bin/code-server-health-check
 
 Security Notes:
 - Config file secured with 600 permissions
 - SSL auto-renewal enabled
 - Firewall configured
-- Health monitoring active
-
-Health Monitoring:
-- Automatic checks every 15 minutes
-- Logs: $HEALTH_CHECK_LOG
-- System monitoring for disk, memory, SSL expiry
-
-Extensions:
-- Mode: $EXTENSION_MODE
-- Essential extensions pre-installed (if selected)
-- Open VSX marketplace integration
+- Docker permission issues resolved
 
 For support and updates, visit: https://github.com/coder/code-server
 EOF
@@ -2013,9 +1424,9 @@ main() {
   | |____| | | | (_| | | | | | |  __/ (_) |
    \_____|_| |_|\__,_|_| |_|_|_|\___|\___/ 
                                             
-    Code-Server Ultimate Installer (FIXED)
+    Code-Server Complete Installer
     Author: MiniMax Agent
-    Version: 3.1 Ultimate Release (Enhanced with Extensions & Health Monitoring + GUARANTEED Panel)
+    Version: 2.3 Docker Permission Fix Release
 EOF
     echo -e "${NC}"
     echo ""
@@ -2023,14 +1434,11 @@ EOF
     # Initialize log
     sudo mkdir -p "$(dirname "$LOG_FILE")"
     sudo touch "$LOG_FILE"
-    sudo mkdir -p "$(dirname "$HEALTH_CHECK_LOG")"
-    sudo touch "$HEALTH_CHECK_LOG"
     if [[ $EUID -ne 0 ]]; then
         sudo chown "$USER:$USER" "$LOG_FILE"
-        sudo chown "$USER:$USER" "$HEALTH_CHECK_LOG"
     fi
     
-    print_status "Starting Code-Server Ultimate installation..."
+    print_status "Starting Code-Server installation..."
     
     # Step 1: Check root privileges
     check_root
@@ -2059,34 +1467,11 @@ EOF
     # Step 9: Start services
     start_services
     
-    # Step 10: Install extensions (NEW FEATURE)
-    install_default_extensions
+    # Step 10: Create management panel
+    create_management_panel
     
-    # Step 11: Setup health monitoring (NEW FEATURE)
-    setup_health_monitoring
-    
-    # CRITICAL FIX: Ensure management panel is created even if previous steps had issues
-    print_status "Creating management panel (guaranteed)..."
-    if ensure_management_panel; then
-        print_success "Management panel creation: SUCCESS"
-    else
-        print_error "Management panel creation: FAILED"
-        print_warning "Installation completed but management panel may not be available"
-        print_info "You can manually create it by re-running this script or contact support"
-    fi
-    
-    # Step 13: Show completion info
+    # Step 11: Show completion info
     show_completion_info
-    
-    # FINAL VERIFICATION: Double-check that panel exists
-    print_status "Final verification of management panel..."
-    if [[ -x "$MANAGEMENT_PANEL" ]]; then
-        print_success "✓ Management panel is ready at: $MANAGEMENT_PANEL"
-        print_info "Test command: sudo $MANAGEMENT_PANEL"
-    else
-        print_warning "⚠ Management panel verification failed"
-        print_info "You can manually verify with: ls -la $MANAGEMENT_PANEL"
-    fi
 }
 
 # Check if jq is installed (required for config parsing)
