@@ -146,7 +146,7 @@ collect_user_input() {
     "install_method": "$INSTALL_METHOD",
     "timezone": "${TIMEZONE:-UTC}",
     "install_date": "$(date -Iseconds)",
-    "version": "2.3"
+    "version": "2.5"
 }
 EOF
     
@@ -162,7 +162,7 @@ EOF
     "install_method": "$INSTALL_METHOD",
     "timezone": "${TIMEZONE:-UTC}",
     "install_date": "$(date -Iseconds)",
-    "version": "2.3"
+    "version": "2.5"
 }
 EOF
     fi
@@ -772,15 +772,54 @@ EOF
     fi
 }
 
-# Function to setup SSL certificate with enhanced error handling
+# Function to wait for DNS propagation
+wait_for_dns_propagation() {
+    local domain="$1"
+    local server_ip="$2"
+    local max_wait_minutes=30
+    local max_attempts=$((max_wait_minutes * 60 / 10))  # Check every 10 seconds
+    local attempt=1
+    
+    print_status "Waiting for DNS propagation (max $max_wait_minutes minutes)..."
+    
+    while [[ $attempt -le $max_attempts ]]; do
+        local domain_ip=""
+        
+        # Try multiple methods to get domain IP
+        if command -v dig &>/dev/null; then
+            domain_ip=$(dig +short "$domain" @8.8.8.8 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+        elif command -v nslookup &>/dev/null; then
+            domain_ip=$(nslookup "$domain" 2>/dev/null | awk '/^Address: / { print $2 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+        elif command -v host &>/dev/null; then
+            domain_ip=$(host "$domain" 2>/dev/null | awk '/has address/ { print $4 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+        fi
+        
+        if [[ -n "$domain_ip" && "$domain_ip" == "$server_ip" ]]; then
+            print_success "DNS propagation complete! Domain now points to server IP"
+            return 0
+        fi
+        
+        print_status "Attempt $attempt/$max_attempts: Domain IP: ${domain_ip:-'Not found'}, Server IP: $server_ip"
+        
+        if [[ $attempt -eq $max_attempts ]]; then
+            print_warning "DNS propagation timeout reached"
+            return 1
+        fi
+        
+        sleep 10
+        ((attempt++))
+    done
+}
+
+# Function to setup SSL certificate with enhanced error handling and auto DNS retry
 setup_ssl() {
     print_status "Setting up SSL certificate..."
     
-    # IMPROVED: Domain DNS check with multiple fallback methods
-    DOMAIN_IP=""
+    # Get server IP
     SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "")
     
-    # Try multiple methods to get domain IP
+    # Check domain DNS and wait for propagation if needed
+    DOMAIN_IP=""
     if command -v dig &>/dev/null; then
         DOMAIN_IP=$(dig +short "$DOMAIN" @8.8.8.8 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
     elif command -v nslookup &>/dev/null; then
@@ -791,13 +830,21 @@ setup_ssl() {
     
     # Check if domain DNS is pointing to this server
     if [[ -n "$DOMAIN_IP" && -n "$SERVER_IP" && "$DOMAIN_IP" != "$SERVER_IP" ]]; then
-        print_warning "Domain DNS may not be pointing to this server"
+        print_warning "Domain DNS not pointing to this server"
         print_status "Domain IP: $DOMAIN_IP, Server IP: $SERVER_IP"
-        read -p "Continue anyway? (y/N): " -n 1 -r
+        
+        # Offer DNS propagation wait
+        print_status "Would you like to wait for DNS propagation? (This can take up to 30 minutes)"
+        read -p "Wait for DNS propagation? (y/N): " -n 1 -r
         echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            print_error "SSL setup aborted"
-            exit 1
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            if wait_for_dns_propagation "$DOMAIN" "$SERVER_IP"; then
+                print_success "DNS propagation successful, continuing with SSL setup"
+            else
+                print_warning "DNS propagation timeout, continuing anyway..."
+            fi
+        else
+            print_status "Continuing anyway as requested..."
         fi
     fi
     
