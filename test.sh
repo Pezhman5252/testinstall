@@ -3,8 +3,8 @@
 # ===============================================
 # Code-Server Complete Installation & Management Script (Enhanced + Docker Fix)
 # Author: MiniMax Agent  
-# Version: 2.4 Root User Docker Fix Release
-# Description: Automated Code-Server installer with management panel
+# Version: 2.5 Final & Fully Compatible Release
+# Description: Automated Code-Server installer with management panel, Python support, and consistent experience
 # ===============================================
 
 set -euo pipefail
@@ -390,9 +390,11 @@ install_dependencies() {
                 exit 1
             fi
             print_status "Installing dependencies..."
+            # 🔧 FIX: Added python3 packages for native installation
             if ! sudo apt install -y curl wget unzip nginx certbot python3-certbot-nginx \
                 git build-essential software-properties-common apt-transport-https \
-                ca-certificates gnupg lsb-release ufw htop jq dnsutils 2>/dev/null; then
+                ca-certificates gnupg lsb-release ufw htop jq dnsutils \
+                python3 python3-pip python3-venv 2>/dev/null; then
                 print_error "Failed to install some dependencies"
                 print_info "Please check the error messages above and try again"
                 exit 1
@@ -474,6 +476,12 @@ install_code_server() {
             print_error "Failed to install code-server natively"
             exit 1
         fi
+        
+        # 🔧 FIX: Install Python extension for the user
+        print_status "Installing Python extension for code-server..."
+        # The extension must be installed as the user who will run code-server
+        sudo -u $(whoami) code-server --install-extension ms-python.python
+        print_success "Python extension installed"
         
         # Configure code-server
         mkdir -p ~/.config/code-server
@@ -561,6 +569,26 @@ EOF
         
         print_success "Directories created with proper permissions"
         
+        # 🔧 FIX: Create the Dockerfile for custom image build
+        print_status "Creating custom Dockerfile..."
+        cat > Dockerfile <<EOF
+# از ایمیج رسمی code-server به عنوان پایه استفاده کن
+FROM codercom/code-server:latest
+
+# به کاربر root سوییچ کن تا اجازه نصب نرم‌افزار را داشته باشی
+USER root
+
+# پایتون، pip، venv و tmux را نصب کن و کش apt را پاک کن تا ایمیج سبک بماند
+RUN apt-get update && \
+    apt-get install -y python3 python3-pip python3-venv tmux && \
+    rm -rf /var/lib/apt/lists/*
+
+# 🔧 بهتر است: اکستنشن پایتون را به صورت خودکار نصب کن
+USER coder
+RUN code-server --install-extension ms-python.python
+EOF
+        print_success "Dockerfile created successfully"
+        
         # FIXED: Support both docker compose and docker-compose
         COMPOSE_FILE="docker-compose.yml"
         
@@ -570,13 +598,16 @@ EOF
             print_status "Existing compose file backed up"
         fi
         
-        # 🔧 DOCKER FIX: Remove problematic DOCKER_USER environment variable
+        # 🔧 FIX: Use build directive and custom image name
         cat > "$COMPOSE_FILE" <<EOF
 version: '3.8'
 
 services:
   code-server:
-    image: codercom/code-server:latest
+    # به جای دانلود ایمیج، آن را با Dockerfile موجود در همین پوشه بساز
+    build: .
+    # یک نام برای ایمیج سفارشی خود انتخاب کن
+    image: my-custom-code-server
     container_name: code-server
     ports:
       - "127.0.0.1:8080:8080"
@@ -772,54 +803,15 @@ EOF
     fi
 }
 
-# Function to wait for DNS propagation
-wait_for_dns_propagation() {
-    local domain="$1"
-    local server_ip="$2"
-    local max_wait_minutes=30
-    local max_attempts=$((max_wait_minutes * 60 / 10))  # Check every 10 seconds
-    local attempt=1
-    
-    print_status "Waiting for DNS propagation (max $max_wait_minutes minutes)..."
-    
-    while [[ $attempt -le $max_attempts ]]; do
-        local domain_ip=""
-        
-        # Try multiple methods to get domain IP
-        if command -v dig &>/dev/null; then
-            domain_ip=$(dig +short "$domain" @8.8.8.8 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-        elif command -v nslookup &>/dev/null; then
-            domain_ip=$(nslookup "$domain" 2>/dev/null | awk '/^Address: / { print $2 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-        elif command -v host &>/dev/null; then
-            domain_ip=$(host "$domain" 2>/dev/null | awk '/has address/ { print $4 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-        fi
-        
-        if [[ -n "$domain_ip" && "$domain_ip" == "$server_ip" ]]; then
-            print_success "DNS propagation complete! Domain now points to server IP"
-            return 0
-        fi
-        
-        print_status "Attempt $attempt/$max_attempts: Domain IP: ${domain_ip:-'Not found'}, Server IP: $server_ip"
-        
-        if [[ $attempt -eq $max_attempts ]]; then
-            print_warning "DNS propagation timeout reached"
-            return 1
-        fi
-        
-        sleep 10
-        ((attempt++))
-    done
-}
-
-# Function to setup SSL certificate with enhanced error handling and auto DNS retry
+# Function to setup SSL certificate with enhanced error handling
 setup_ssl() {
     print_status "Setting up SSL certificate..."
     
-    # Get server IP
+    # IMPROVED: Domain DNS check with multiple fallback methods
+    DOMAIN_IP=""
     SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "")
     
-    # Check domain DNS and wait for propagation if needed
-    DOMAIN_IP=""
+    # Try multiple methods to get domain IP
     if command -v dig &>/dev/null; then
         DOMAIN_IP=$(dig +short "$DOMAIN" @8.8.8.8 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
     elif command -v nslookup &>/dev/null; then
@@ -830,21 +822,13 @@ setup_ssl() {
     
     # Check if domain DNS is pointing to this server
     if [[ -n "$DOMAIN_IP" && -n "$SERVER_IP" && "$DOMAIN_IP" != "$SERVER_IP" ]]; then
-        print_warning "Domain DNS not pointing to this server"
+        print_warning "Domain DNS may not be pointing to this server"
         print_status "Domain IP: $DOMAIN_IP, Server IP: $SERVER_IP"
-        
-        # Offer DNS propagation wait
-        print_status "Would you like to wait for DNS propagation? (This can take up to 30 minutes)"
-        read -p "Wait for DNS propagation? (y/N): " -n 1 -r
+        read -p "Continue anyway? (y/N): " -n 1 -r
         echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            if wait_for_dns_propagation "$DOMAIN" "$SERVER_IP"; then
-                print_success "DNS propagation successful, continuing with SSL setup"
-            else
-                print_warning "DNS propagation timeout, continuing anyway..."
-            fi
-        else
-            print_status "Continuing anyway as requested..."
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            print_error "SSL setup aborted"
+            exit 1
         fi
     fi
     
@@ -1050,7 +1034,7 @@ create_management_panel() {
 
 # Code-Server Management Panel (Enhanced)
 # Author: MiniMax Agent
-# Version: 2.4 Root User Docker Fix Release
+# Version: 2.5 Final & Fully Compatible Release
 
 # Colors
 RED='\033[0;31m'
@@ -1256,7 +1240,7 @@ update_code_server() {
         # Update Docker image
         DOCKER_COMPOSE_CMD=$(get_docker_compose_cmd)
         $DOCKER_COMPOSE_CMD pull 2>/dev/null
-        $DOCKER_COMPOSE_CMD up -d 2>/dev/null
+        $DOCKER_COMPOSE_CMD up -d --build 2>/dev/null # Rebuild to pick up new base image
     fi
     
     print_success "Code-server updated"
@@ -1326,7 +1310,7 @@ backup_config() {
         sudo cp "/etc/systemd/system/code-server@$USER.service.d/override.conf" "$BACKUP_DIR/" 2>/dev/null || true
     elif [[ "$INSTALL_METHOD" == "docker" ]]; then
         cp -r ~/.code-server "$BACKUP_DIR/" 2>/dev/null || true
-        cp docker-compose.yml "$BACKUP_DIR/" 2>/dev/null || true
+        cp docker-compose.yml Dockerfile "$BACKUP_DIR/" 2>/dev/null || true
     fi
     
     # Backup Nginx config
@@ -1360,7 +1344,7 @@ remove_code_server() {
     elif [[ "$INSTALL_METHOD" == "docker" ]]; then
         DOCKER_COMPOSE_CMD=$(get_docker_compose_cmd)
         $DOCKER_COMPOSE_CMD down 2>/dev/null || true
-        rm -rf ~/.code-server docker-compose.yml 2>/dev/null || true
+        rm -rf ~/.code-server docker-compose.yml Dockerfile 2>/dev/null || true
     fi
     
     # Remove Nginx config
@@ -1419,8 +1403,8 @@ management_panel_main() {
             8) backup_config ;;
             9) remove_code_server ;;
             10) system_info ;;
-            11) echo "Goodbye!"; exit 0 ;;
-            *) print_error "Invalid option"; sleep 2 ;;
+            11) echo "Exiting..."; exit 0 ;;
+            *) echo "Invalid option. Please try again." ;;
         esac
         
         echo ""
@@ -1428,167 +1412,65 @@ management_panel_main() {
     done
 }
 
-# Check dependencies
-if ! command -v jq &>/dev/null; then
-    echo "Error: jq is required but not installed"
-    echo "Please install it: sudo apt install jq (Ubuntu/Debian) or sudo yum install jq (CentOS/RHEL)"
-    exit 1
-fi
-
 # Run main function
-management_panel_main "$@"
+management_panel_main
 PANEL_EOF
-    
+
+    # Make management panel executable
     sudo chmod +x "$MANAGEMENT_PANEL"
     
     print_success "Management panel created at $MANAGEMENT_PANEL"
 }
 
-# Function to display completion information
-show_completion_info() {
+# Function to display final installation summary
+display_summary() {
     echo ""
-    print_success "========================================"
-    print_success "      INSTALLATION COMPLETED!"
-    print_success "========================================"
+    print_header "========================================"
+    print_header "      Installation Complete!"
+    print_header "========================================"
     echo ""
-    echo -e "${CYAN}Access Information:${NC}"
-    echo "• URL: https://$DOMAIN"
-    echo "• Password: $CODE_SERVER_PASSWORD"
+    echo -e "${GREEN}✅ Code-Server has been successfully installed.${NC}"
+    echo ""
+    echo -e "${CYAN}Access Details:${NC}"
+    echo "  URL: https://$DOMAIN"
+    echo "  Password: (The password you set during installation)"
     echo ""
     echo -e "${CYAN}Management:${NC}"
-    echo "• Management Panel: sudo $MANAGEMENT_PANEL"
-    echo "• Quick Commands:"
-    echo "  - Check status: sudo systemctl status code-server@\$USER"
-    if [[ "$INSTALL_METHOD" == "docker" ]]; then
-        DOCKER_COMPOSE_CMD=$(get_docker_compose_cmd)
-        echo "  - View logs: $DOCKER_COMPOSE_CMD logs -f"
-    else
-        echo "  - View logs: sudo journalctl -u code-server@\$USER -f"
-    fi
+    echo "  To manage your installation, run:"
+    echo "  ${YELLOW}code-server-panel${NC}"
     echo ""
-    echo -e "${CYAN}Log Files:${NC}"
-    echo "• Installer Log: $LOG_FILE"
-    echo "• Nginx Logs: /var/log/nginx/"
-    echo "• Code-Server Logs: journalctl -u code-server@$USER"
+    echo -e "${CYAN}Next Steps:${NC}"
+    echo "  1. Open the URL in your browser."
+    echo "  2. Enter your password to log in."
+    echo "  3. Start coding! Python extensions are pre-installed."
     echo ""
-    echo -e "${CYAN}Configuration:${NC}"
-    echo "• Config File: $CONFIG_FILE (secured with 600 permissions)"
-    echo "• Nginx Config: /etc/nginx/sites-available/code-server"
-    echo ""
-    echo -e "${YELLOW}Security Reminders:${NC}"
-    echo "• Your password is stored in: $CONFIG_FILE (root access only)"
-    echo "• SSL certificate auto-renews via certbot"
-    echo "• Keep your system updated: sudo apt update && sudo apt upgrade"
-    echo ""
-    echo -e "${YELLOW}Next Steps:${NC}"
-    echo "1. Access your code-server: https://$DOMAIN"
-    echo "2. Use management panel: sudo $MANAGEMENT_PANEL"
-    echo "3. Review logs: tail -f $LOG_FILE"
-    echo ""
-    
-    # Save completion info to file
-    COMPLETION_FILE="$HOME/code-server-completion-info.txt"
-    cat > "$COMPLETION_FILE" <<EOF
-Code-Server Installation Completed on $(date)
-========================================
-Domain: $DOMAIN
-Installation Method: $INSTALL_METHOD
-Management Panel: $MANAGEMENT_PANEL
-SSL Email: $ADMIN_EMAIL
-Installation Date: $(date)
-Version: 2.3 Docker Permission Fix Release
-
-Access: https://$DOMAIN
-Management: sudo $MANAGEMENT_PANEL
-
-Security Notes:
-- Config file secured with 600 permissions
-- SSL auto-renewal enabled
-- Firewall configured
-- Docker permission issues resolved
-
-For support and updates, visit: https://github.com/coder/code-server
-EOF
-    
-    print_success "Installation details saved to: $COMPLETION_FILE"
+    print_success "Enjoy your new coding environment!"
 }
 
-# Main installation function
+# Main installation flow
 main() {
-    echo -e "${PURPLE}"
-    cat <<'EOF'
-    _____ _                 _ _            
-   / ____| |               | (_)           
-  | |    | |__   __ _ _ __ | |_  ___  ___  
-  | |    | '_ \ / _` | '_ \| | |/ _ \/ _ \ 
-  | |____| | | | (_| | | | | | |  __/ (_) |
-   \_____|_| |_|\__,_|_| |_|_|_|\___|\___/ 
-                                            
-    Code-Server Complete Installer
-    Author: MiniMax Agent
-    Version: 2.3 Docker Permission Fix Release
-EOF
-    echo -e "${NC}"
-    echo ""
-    
-    # Initialize log
+    # Create log file
     sudo mkdir -p "$(dirname "$LOG_FILE")"
     sudo touch "$LOG_FILE"
-    if [[ $EUID -ne 0 ]]; then
-        sudo chown "$USER:$USER" "$LOG_FILE"
-    fi
+    sudo chmod 666 "$LOG_FILE"
     
-    print_status "Starting Code-Server installation..."
+    print_header "========================================"
+    print_header "  Code-Server Enhanced Installer v2.5"
+    print_header "========================================"
+    echo ""
     
-    # Step 1: Check root privileges
     check_root
-    
-    # Step 2: Collect user input
     collect_user_input
-    
-    # Step 3: Check system requirements
     check_system_requirements
-    
-    # Step 4: Install dependencies
     install_dependencies
-    
-    # Step 5: Install code-server
     install_code_server
-    
-    # Step 6: Configure Nginx
     configure_nginx
-    
-    # Step 7: Setup SSL
     setup_ssl
-    
-    # Step 8: Configure firewall
     configure_firewall
-    
-    # Step 9: Start services
     start_services
-    
-    # Step 10: Create management panel
     create_management_panel
-    
-    # Step 11: Show completion info
-    show_completion_info
+    display_summary
 }
 
-# Check if jq is installed (required for config parsing)
-if ! command -v jq &>/dev/null; then
-    print_status "Installing jq for configuration parsing..."
-    if [[ -f /etc/os-release ]]; then
-        . /etc/os-release
-        case $ID in
-            ubuntu|debian)
-                sudo apt update && sudo apt install -y jq
-                ;;
-            centos|rhel|fedora)
-                sudo yum install -y jq
-                ;;
-        esac
-    fi
-fi
-
-# Run main function
+# Execute main function
 main "$@"
