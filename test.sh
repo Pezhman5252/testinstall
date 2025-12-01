@@ -3,7 +3,7 @@
 # ===============================================
 # Code-Server Complete Installation & Management Script (Enhanced + Docker Fix)
 # Author: MiniMax Agent  
-# Version: 2.5 Final & Fully Compatible Release
+# Version: 2.6 Final Bug-Fix Release
 # Description: Automated Code-Server installer with management panel, Python support, and consistent experience
 # ===============================================
 
@@ -46,6 +46,11 @@ print_error() {
 
 print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+# 🔧 BUG FIX: Added print_header function to the main script scope
+print_header() {
+    echo -e "${CYAN}$1${NC}"
 }
 
 # Function to check if running as root
@@ -146,7 +151,7 @@ collect_user_input() {
     "install_method": "$INSTALL_METHOD",
     "timezone": "${TIMEZONE:-UTC}",
     "install_date": "$(date -Iseconds)",
-    "version": "2.5"
+    "version": "2.6"
 }
 EOF
     
@@ -162,7 +167,7 @@ EOF
     "install_method": "$INSTALL_METHOD",
     "timezone": "${TIMEZONE:-UTC}",
     "install_date": "$(date -Iseconds)",
-    "version": "2.5"
+    "version": "2.6"
 }
 EOF
     fi
@@ -1034,7 +1039,7 @@ create_management_panel() {
 
 # Code-Server Management Panel (Enhanced)
 # Author: MiniMax Agent
-# Version: 2.5 Final & Fully Compatible Release
+# Version: 2.6 Final Bug-Fix Release
 
 # Colors
 RED='\033[0;31m'
@@ -1455,7 +1460,7 @@ main() {
     sudo chmod 666 "$LOG_FILE"
     
     print_header "========================================"
-    print_header "  Code-Server Enhanced Installer v2.5"
+    print_header "  Code-Server Enhanced Installer v2.6"
     print_header "========================================"
     echo ""
     
