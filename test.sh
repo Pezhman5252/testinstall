@@ -3,7 +3,7 @@
 # ===============================================
 # Code-Server Complete Installation & Management Script (Enhanced + Docker Fix)
 # Author: MiniMax Agent  
-# Version: 2.6 Final Bug-Fix Release
+# Version: 2.7 Final Extension-Fix Release
 # Description: Automated Code-Server installer with management panel, Python support, and consistent experience
 # ===============================================
 
@@ -151,7 +151,7 @@ collect_user_input() {
     "install_method": "$INSTALL_METHOD",
     "timezone": "${TIMEZONE:-UTC}",
     "install_date": "$(date -Iseconds)",
-    "version": "2.6"
+    "version": "2.7"
 }
 EOF
     
@@ -167,7 +167,7 @@ EOF
     "install_method": "$INSTALL_METHOD",
     "timezone": "${TIMEZONE:-UTC}",
     "install_date": "$(date -Iseconds)",
-    "version": "2.6"
+    "version": "2.7"
 }
 EOF
     fi
@@ -720,6 +720,21 @@ EOF
             fi
         fi
         
+        # 🔧 FINAL FIX: Post-startup extension installation as a fallback
+        print_status "Performing post-startup extension installation as a fallback..."
+        # We need to wait a bit more for code-server to be fully ready to accept extension commands
+        sleep 10
+        if ! docker exec code-server code-server --list-extensions 2>/dev/null | grep -q "ms-python.python"; then
+            print_warning "Python extension not found after container start. Installing now..."
+            if docker exec code-server code-server --install-extension ms-python.python; then
+                print_success "Python extension installed successfully after startup."
+            else
+                print_error "Failed to install Python extension after startup."
+            fi
+        else
+            print_success "Python extension is already installed."
+        fi
+        
         print_success "Code-server installed with Docker and validated"
     fi
 }
@@ -1039,7 +1054,7 @@ create_management_panel() {
 
 # Code-Server Management Panel (Enhanced)
 # Author: MiniMax Agent
-# Version: 2.6 Final Bug-Fix Release
+# Version: 2.7 Final Extension-Fix Release
 
 # Colors
 RED='\033[0;31m'
@@ -1246,6 +1261,13 @@ update_code_server() {
         DOCKER_COMPOSE_CMD=$(get_docker_compose_cmd)
         $DOCKER_COMPOSE_CMD pull 2>/dev/null
         $DOCKER_COMPOSE_CMD up -d --build 2>/dev/null # Rebuild to pick up new base image
+        
+        # 🔧 FINAL FIX: Re-check and install extension after update
+        sleep 10
+        if ! docker exec code-server code-server --list-extensions 2>/dev/null | grep -q "ms-python.python"; then
+            echo "Python extension not found after update. Installing now..."
+            docker exec code-server code-server --install-extension ms-python.python
+        fi
     fi
     
     print_success "Code-server updated"
@@ -1460,7 +1482,7 @@ main() {
     sudo chmod 666 "$LOG_FILE"
     
     print_header "========================================"
-    print_header "  Code-Server Enhanced Installer v2.6"
+    print_header "  Code-Server Enhanced Installer v2.7"
     print_header "========================================"
     echo ""
     
