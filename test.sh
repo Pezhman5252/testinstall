@@ -3,7 +3,7 @@
 # ===============================================
 # Code-Server Complete Installation & Management Script (Enhanced + Docker Fix)
 # Author: MiniMax Agent  
-# Version: 2.3 Docker Permission Fix Release
+# Version: 2.4 Root User Docker Fix Release
 # Description: Automated Code-Server installer with management panel
 # ===============================================
 
@@ -512,27 +512,46 @@ EOF
                 print_error "Failed to install Docker"
                 exit 1
             fi
-            sudo usermod -aG docker "$USER" 2>/dev/null
-            print_warning "Please log out and log back in for Docker permissions to take effect"
+            # Handle Docker group permissions
+            if [[ "$USER" != "root" ]]; then
+                sudo usermod -aG docker "$USER" 2>/dev/null
+                print_warning "Please log out and log back in for Docker permissions to take effect"
+            else
+                print_status "Running as root - Docker permissions already available"
+            fi
         fi
         
         # Create directories for persistence with proper permissions 🔧 DOCKER FIX
         print_status "Creating code-server directories..."
         mkdir -p ~/.code-server/{config,local,workspace}
         
-        # 🔧 DOCKER FIX: Set proper ownership and permissions
+        # 🔧 DOCKER FIX: Set proper ownership and permissions for all scenarios
         print_status "Setting proper ownership and permissions..."
         CURRENT_USER=$(whoami)
         
-        # Set ownership to current user
-        sudo chown -R $CURRENT_USER:$CURRENT_USER ~/.code-server/ 2>/dev/null || {
-            print_warning "Failed to change ownership, trying as root..."
-            sudo chown -R root:root ~/.code-server/ 2>/dev/null || print_warning "Could not set ownership"
-        }
+        # For Docker containers, code-server runs as user 'coder' (UID 1000)
+        # We need to set ownership to UID 1000 so the container can access the volumes
+        if [[ "$CURRENT_USER" == "root" ]]; then
+            print_status "Running as root - setting ownership to container user (UID 1000)..."
+            # Set ownership to UID 1000 (coder user in container)
+            sudo chown -R 1000:1000 ~/.code-server/ 2>/dev/null || {
+                print_warning "Failed to set ownership to 1000:1000, trying 777 permissions..."
+                chmod -R 777 ~/.code-server/
+            }
+        else
+            print_status "Running as user - setting ownership to current user..."
+            # Set ownership to current user
+            sudo chown -R $CURRENT_USER:$CURRENT_USER ~/.code-server/ 2>/dev/null || {
+                print_warning "Failed to change ownership, trying as root..."
+                sudo chown -R root:root ~/.code-server/ 2>/dev/null || print_warning "Could not set ownership"
+            }
+        fi
         
-        # Set permissions
+        # Set permissions - make everything accessible to container
         chmod -R 755 ~/.code-server/
         chmod -R 777 ~/.code-server/workspace  # Make workspace fully accessible
+        chmod -R 755 ~/.code-server/config     # Make config accessible
+        chmod -R 755 ~/.code-server/local      # Make local accessible
         
         # Validate directory creation
         if [[ ! -d ~/.code-server/config || ! -d ~/.code-server/local || ! -d ~/.code-server/workspace ]]; then
@@ -595,8 +614,17 @@ EOF
         
         # Check Docker daemon status
         if ! docker info &>/dev/null; then
-            print_error "Docker daemon is not running"
-            exit 1
+            print_warning "Docker daemon is not running, starting..."
+            sudo systemctl start docker 2>/dev/null || sudo service docker start 2>/dev/null || {
+                print_error "Failed to start Docker daemon"
+                exit 1
+            }
+            # Wait for daemon to be ready
+            sleep 3
+            if ! docker info &>/dev/null; then
+                print_error "Docker daemon still not responding"
+                exit 1
+            fi
         fi
         
         if ! $DOCKER_COMPOSE_CMD up -d; then
@@ -626,9 +654,34 @@ EOF
         # Check if container is running
         if ! docker ps --filter "name=code-server" --format "table {{.Names}}\t{{.Status}}" | grep -q "Up"; then
             print_error "Container failed to start properly"
-            print_info "Container logs:"
-            docker logs code-server --tail=20
-            exit 1
+            print_info "Attempting cleanup and retry..."
+            
+            # Cleanup
+            $DOCKER_COMPOSE_CMD down 2>/dev/null
+            docker volume prune -f 2>/dev/null
+            docker system prune -f 2>/dev/null
+            
+            # Wait a bit
+            sleep 5
+            
+            # Retry
+            print_status "Retrying container startup..."
+            if $DOCKER_COMPOSE_CMD up -d; then
+                sleep 5
+                if docker ps --filter "name=code-server" --format "table {{.Names}}\t{{.Status}}" | grep -q "Up"; then
+                    print_success "Container started successfully on retry"
+                else
+                    print_error "Container still failing after retry"
+                    print_info "Container logs:"
+                    docker logs code-server --tail=20
+                    exit 1
+                fi
+            else
+                print_error "Container failed to start after cleanup"
+                print_info "Container logs:"
+                docker logs code-server --tail=20
+                exit 1
+            fi
         fi
         
         print_success "Code-server installed with Docker and validated"
@@ -950,7 +1003,7 @@ create_management_panel() {
 
 # Code-Server Management Panel (Enhanced)
 # Author: MiniMax Agent
-# Version: 2.3 Docker Permission Fix Release
+# Version: 2.4 Root User Docker Fix Release
 
 # Colors
 RED='\033[0;31m'
